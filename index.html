@@ -1,0 +1,1350 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Báo cáo Tương tác - Quản lý Không gian</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Chosen Palette: Calm Harmony (Light Slate/Gray background with Soft Blue/Teal accents) -->
+    <!-- Application Structure Plan: A three-page SPA navigated by header buttons ('Proposal', 'Dashboard', 'Taxonomy'). Each section uses a dashboard style with status cards and summary charts (donut for indoor progress, bar for outdoor projects). A dedicated panel shows detailed text when a user clicks on a project card, providing a drill-down experience. This structure simplifies the report's text into a clear, high-level visual summary with on-demand details, which is more intuitive than reading a linear document. -->
+    <!-- Visualization & Content Choices: 1. Indoor Progress -> Goal: Inform status -> Viz: Donut Chart -> Interaction: Hover tooltips -> Justification: Shows part-to-whole completion clearly -> Library: Chart.js. 2. Outdoor Projects -> Goal: Compare progress -> Viz: Horizontal Bar Chart & Info Cards -> Interaction: Click card to update details panel and highlight chart bar -> Justification: Bar chart excels at comparing distinct items; interaction links visual summary to text details -> Library: Chart.js & Vanilla JS. 3. Detailed Text -> Goal: Provide context -> Viz: HTML text panel -> Interaction: Content updated by JS on click -> Justification: Keeps UI clean, prevents information overload -> Library: Vanilla JS. -->
+    <!-- Data: progress figures are read from data.xlsx (SheetJS) next to this file; DEFAULT_DATA in the script is only a fallback snapshot. -->
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            scroll-behavior: smooth;
+        }
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 400px;
+            margin-left: auto;
+            margin-right: auto;
+            height: 300px;
+            max-height: 400px;
+        }
+        @media (min-width: 768px) {
+            .chart-container {
+                height: 350px;
+            }
+        }
+        .active-card {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+            border-color: #0891b2; /* cyan-600 */
+        }
+        .main-nav-btn {
+            transition: all 0.2s;
+        }
+        .main-nav-btn.active {
+            background-color: #0891b2; /* cyan-600 */
+            color: white;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+         /* Custom scrollbar */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f1f5f9; /* slate-100 */
+            border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #94a3b8; /* slate-400 */
+            border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #64748b; /* slate-500 */
+        }
+        /* --- Taxonomy tree --- */
+        .taxo-tree summary { list-style: none; cursor: pointer; }
+        .taxo-tree summary::-webkit-details-marker { display: none; }
+        .taxo-l1 { background: #ffffff; border-left: 4px solid var(--acc); }
+        .taxo-l1 > summary { border-top-right-radius: 0.5rem; }
+        .taxo-chev { transition: transform 0.15s ease; }
+        details[open] > summary .taxo-chev { transform: rotate(90deg); }
+        .taxo-kids { margin-left: 1rem; border-left: 1px solid #e2e8f0; padding-left: 0.75rem; }
+        .taxo-node:hover { background: #f8fafc; border-radius: 0.375rem; }
+        .taxo-node { transition: background 0.12s; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+
+    <div class="container mx-auto p-4 md:p-8">
+        
+        <header class="relative text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold text-cyan-800" data-lang-key="mainTitle">Dự án Quản lý Không gian Toàn diện</h1>
+            <div id="data-status" class="mt-3 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-slate-500"></div>
+            <div class="absolute top-0 right-0">
+                <div class="flex items-center p-1 bg-slate-200 rounded-full">
+                    <button id="lang-vi" class="px-3 py-1 text-sm rounded-full bg-cyan-600 text-white shadow">VI</button>
+                    <button id="lang-en" class="px-3 py-1 text-sm rounded-full">EN</button>
+                </div>
+            </div>
+        </header>
+
+        <div id="data-banner" class="hidden" role="status"></div>
+        <input type="file" id="excel-file" accept=".xlsx,.xlsm,.xls" class="hidden">
+
+        <nav class="flex justify-center space-x-2 md:space-x-4 mb-10 p-2 bg-slate-100 rounded-full max-w-2xl mx-auto shadow-inner">
+            <button id="nav-proposal" class="main-nav-btn flex-1 px-4 py-2 rounded-full text-cyan-700 font-semibold" data-lang-key="navProposal">Proposal</button>
+            <button id="nav-dashboard" class="main-nav-btn flex-1 px-4 py-2 rounded-full text-cyan-700 font-semibold active" data-lang-key="navDashboard">Báo cáo Tiến độ</button>
+            <button id="nav-taxonomy" class="main-nav-btn flex-1 px-4 py-2 rounded-full text-cyan-700 font-semibold" data-lang-key="navTaxonomy">Phân cấp Định danh</button>
+        </nav>
+
+        <div id="app-container">
+
+            <section id="proposal-page" class="hidden">
+                 <h2 class="text-2xl md:text-3xl font-bold text-cyan-800 text-center mb-2" data-lang-key="proposalTitle">Đề xuất Kế hoạch</h2>
+                 <p class="text-center text-slate-600 mb-10" data-lang-key="proposalSubtitle">Mô tả chi tiết mục tiêu và phạm vi công việc của từng hạng mục trong dự án.</p>
+
+                 <div class="space-y-8">
+                    <!-- Indoor Section -->
+                    <div class="p-6 bg-white rounded-xl shadow-md">
+                        <h3 class="text-2xl font-bold text-cyan-800 mb-4 border-l-4 border-cyan-500 pl-4" data-lang-key="indoorSectionTitle">Không gian Trong nhà (Indoor)</h3>
+                        <div class="grid md:grid-cols-2 gap-6">
+                            <div class="p-4 border border-slate-200 rounded-lg bg-slate-50">
+                                <h4 class="font-bold text-lg text-slate-700" data-lang-key="geoModelingTitle">Mô hình hóa Thông tin Hình học</h4>
+                                <p class="text-sm text-slate-600 mt-2" data-lang-key="geoModelingDesc"><b>Mục tiêu:</b> Xây dựng nền tảng "song sinh kỹ thuật số" (Digital Twin) cho toàn bộ 17 tòa nhà trong campus. <br><b>Phạm vi:</b> Dựng mô hình 2D và 3D chính xác, thể hiện đúng kích thước, vị trí, diện tích của từng phòng, hành lang, và các không gian chức năng khác. Đây là lớp dữ liệu cơ sở cho mọi hoạt động quản lý về sau.</p>
+                            </div>
+                            <div class="p-4 border border-slate-200 rounded-lg bg-slate-50">
+                                <h4 class="font-bold text-lg text-slate-700" data-lang-key="nonGeoModelingTitle">Mô hình hóa Thông tin Phi hình học</h4>
+                                <p class="text-sm text-slate-600 mt-2" data-lang-key="nonGeoModelingDesc"><b>Mục tiêu:</b> Làm giàu mô hình hình học bằng các dữ liệu vận hành. <br><b>Phạm vi:</b> Gán các thuộc tính quan trọng vào từng không gian trong mô hình, bao gồm: mã phòng, tên gọi, chức năng sử dụng, sức chứa, tình trạng, và danh sách tài sản liên quan. Dữ liệu này giúp tối ưu hóa việc sử dụng không gian và quản lý tài sản.</p>
+                            </div>
+                        </div>
+
+                        <hr class="my-6 border-slate-200">
+                        <div>
+                            <h4 class="text-xl font-bold text-slate-800 mb-3" data-lang-key="bridgeTitle">Cầu nối giữa Mô hình và Thực tế: Xây dựng Quy trình Vận hành</h4>
+                            <p class="text-sm text-slate-600 bg-cyan-50 border-l-4 border-cyan-400 p-4 rounded-r-lg" data-lang-key="bridgeDesc">
+                                Để hiện thực hóa tiềm năng của mô hình thông tin, bước tiếp theo là xây dựng một bộ <strong>hướng dẫn và quy trình vận hành</strong> chi tiết. Điều này đảm bảo rằng các nhóm có thể khai thác dữ liệu từ mô hình một cách nhất quán và hiệu quả, làm cầu nối giữa việc "có mô hình" và "sử dụng được mô hình" để thực hiện các công tác quản lý.
+                            </p>
+                        </div>
+                        <hr class="my-6 border-slate-200">
+
+                        <div>
+                            <h4 class="text-xl font-bold text-slate-800 mb-4" data-lang-key="resultsTitle">Kết quả kỳ vọng: Các tác vụ có thể đạt được khi có quy trình vận hành</h4>
+                            <div class="grid md:grid-cols-1 lg:grid-cols-3 gap-6">
+                                <!-- Group I -->
+                                <div class="p-4 bg-slate-50 rounded-lg">
+                                    <h5 class="font-bold text-lg text-slate-700 mb-2" data-lang-key="group1Title">I. Nhóm Task Chính – Quản lý & Vận hành Cốt lõi</h5>
+                                    <ul class="space-y-2 text-sm text-slate-600" data-lang-key="group1Items">
+                                        <li><b>Quản lý phòng ốc:</b> Xuất Room Schedule, theo dõi tỉ lệ sử dụng, lập sơ đồ màu trực quan.</li>
+                                        <li><b>Quản lý tài sản:</b> Xuất danh sách nội thất, liên kết mã tài sản, lập kế hoạch bảo trì.</li>
+                                        <li><b>Quản lý cấu kiện:</b> Thống kê số lượng cửa, vật liệu để lên kế hoạch sơn sửa, thay thế.</li>
+                                        <li><b>Kiểm tra quy chuẩn:</b> Đối chiếu tự động với QCVN/TCVN, flag các phòng không đạt chuẩn.</li>
+                                    </ul>
+                                </div>
+                                <!-- Group II -->
+                                <div class="p-4 bg-slate-50 rounded-lg">
+                                    <h5 class="font-bold text-lg text-slate-700 mb-2" data-lang-key="group2Title">II. Nhóm Task Phụ – Phân tích & Hỗ trợ Quyết định</h5>
+                                     <ul class="space-y-2 text-sm text-slate-600" data-lang-key="group2Items">
+                                        <li><b>Phân tích chiếu sáng:</b> Tính tỉ lệ diện tích cửa sổ, phân tích hướng nắng để đề xuất giải pháp tiết kiệm năng lượng.</li>
+                                        <li><b>Phân tích hiệu quả không gian:</b> Phát hiện phòng bị chiếm dụng sai mục đích, đề xuất tái bố trí.</li>
+                                        <li><b>Phân tích vòng đời tài sản:</b> Theo dõi tuổi thọ thiết bị, ước tính chi phí bảo trì và lập kế hoạch thay thế dài hạn.</li>
+                                        <li><b>Phân tích năng lượng (nâng cao):</b> Xuất mô hình sang phần mềm chuyên dụng để tính toán năng lượng tiêu thụ, tải lạnh.</li>
+                                    </ul>
+                                </div>
+                                <!-- Group III -->
+                                <div class="p-4 bg-slate-50 rounded-lg">
+                                    <h5 class="font-bold text-lg text-slate-700 mb-2" data-lang-key="group3Title">III. Nhóm Task Kết Nối & Chuyển giao Dữ liệu</h5>
+                                    <ul class="space-y-2 text-sm text-slate-600" data-lang-key="group3Items">
+                                        <li><b>Xuất dữ liệu:</b> Export sang Excel, Power BI để tạo dashboard vận hành thời gian thực.</li>
+                                        <li><b>Kết nối hệ thống:</b> Tích hợp với các phần mềm CMMS/FM để vận hành số.</li>
+                                        <li><b>Bàn giao số hóa:</b> Tạo bộ hồ sơ as-built BIM cho các đơn vị liên quan.</li>
+                                        <li><b>Liên kết bản đồ:</b> Tích hợp với GIS hoặc bản đồ nội bộ để quản lý trên nền tảng bản đồ.</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+
+                        <hr class="my-6 border-slate-200">
+
+                        <div>
+                            <h4 class="text-xl font-bold text-slate-800 mb-4" data-lang-key="exampleTitle">Ví dụ Output từ Mô hình hóa cho Phòng mẫu (Phòng thực hành điện B3-109)</h4>
+                            <p class="text-sm text-slate-600 mb-6" data-lang-key="exampleDesc">Dưới đây là một số kết quả đầu ra trực quan từ việc xây dựng mô hình thông tin cho một phòng mẫu, minh họa cho khả năng trích xuất dữ liệu của hệ thống.</p>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 items-center">
+                                <div class="p-3 bg-slate-50 rounded-lg">
+                                    <img src="https://res.cloudinary.com/dtvjtjf4i/image/upload/v1762069213/BIM-OUTPUT_3D_view_-_NEW_a4xec9_rvhz1t.jpg" alt="BIM 3D View" class="rounded-md shadow-sm w-full border">
+                                    <p class="text-center text-sm font-semibold text-slate-600 mt-2" data-lang-key="caption3D">Phối cảnh 3D</p>
+                                </div>
+                                <div class="p-3 bg-slate-50 rounded-lg">
+                                    <img src="https://res.cloudinary.com/dtvjtjf4i/image/upload/v1760604848/BIM-OUTPUT_Schedule_for_Fur_and_Mac_eal8bs.jpg" alt="BIM Schedule" class="rounded-md shadow-sm w-full border">
+                                    <p class="text-center text-sm font-semibold text-slate-600 mt-2" data-lang-key="captionSchedule">Bảng thống kê Nội thất & Thiết bị</p>
+                                </div>
+                                <div class="p-3 bg-slate-50 rounded-lg">
+                                    <img src="https://res.cloudinary.com/dtvjtjf4i/image/upload/v1760604848/BIM-OUTPUT_Room_Floor_Plan_-_NEW_xtn8no.jpg" alt="BIM New Floor Plan" class="rounded-md shadow-sm w-full border">
+                                    <p class="text-center text-sm font-semibold text-slate-600 mt-2" data-lang-key="captionNewPlan">Mặt bằng bố trí vật dụng (Mới)</p>
+                                </div>
+                                <div class="p-3 bg-slate-50 rounded-lg">
+                                    <img src="https://res.cloudinary.com/dtvjtjf4i/image/upload/v1760605134/BIM-OUTPUT_Room_Floor_Plan_-_OLD_ifmale.jpg" alt="BIM Old Floor Plan" class="rounded-md shadow-sm w-full border">
+                                    <p class="text-center text-sm font-semibold text-slate-600 mt-2" data-lang-key="captionOldPlan">Mặt bằng bố trí vật dụng (Cũ)</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Outdoor Section -->
+                    <div class="p-6 bg-white rounded-xl shadow-md">
+                        <h3 class="text-2xl font-bold text-cyan-800 mb-4 border-l-4 border-cyan-500 pl-4" data-lang-key="outdoorSectionTitle">Không gian Ngoài trời (Outdoor)</h3>
+                        <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+                             <div class="p-4 border border-slate-200 rounded-lg bg-slate-50">
+                                <h4 class="font-bold text-lg text-slate-700" data-lang-key="signageTitle">Thiết kế hệ thống Bảng hiệu</h4>
+                                <p class="text-sm text-slate-600 mt-2" data-lang-key="signageDesc"><b>Mục tiêu:</b> Nâng cao nhận diện thương hiệu và cải thiện trải nghiệm điều hướng trong campus. <br><b>Phạm vi:</b> Khảo sát hiện trạng, đề xuất các mẫu thiết kế mới, lựa chọn vật liệu và vị trí lắp đặt. Làm việc với nhà thầu để nhận báo giá và lên kế hoạch thi công.</p>
+                            </div>
+                            <div class="p-4 border border-slate-200 rounded-lg bg-slate-50">
+                                <h4 class="font-bold text-lg text-slate-700" data-lang-key="spaceDesignTitle">Thiết kế Không gian</h4>
+                                <p class="text-sm text-slate-600 mt-2" data-lang-key="spaceDesignDesc"><b>Mục tiêu:</b> Tạo dựng môi trường làm việc và học tập xanh, thân thiện và truyền cảm hứng. <br><b>Phạm vi:</b> Khảo sát mặt bằng và nhu cầu, lên ý tưởng quy hoạch lại các khu vực cây xanh, lối đi bộ, khu vực nghỉ ngơi. Làm việc với các đơn vị thiết kế để có phương án và báo giá chi tiết.</p>
+                            </div>
+                            <div class="p-4 border border-slate-200 rounded-lg bg-slate-50">
+                                <h4 class="font-bold text-lg text-slate-700" data-lang-key="energyMgmtTitle">Quản lý Năng lượng</h4>
+                                <p class="text-sm text-slate-600 mt-2" data-lang-key="energyMgmtDesc"><b>Mục tiêu:</b> Tối ưu hóa việc sử dụng năng lượng, giảm chi phí vận hành và hướng tới công trình xanh. <br><b>Phạm vi:</b> Xây dựng bộ hướng dẫn sử dụng năng lượng hiệu quả, tham khảo từ tiêu chí của EDGE. Người thực hiện: Huỳnh + Nghĩa.</p>
+                            </div>
+                             <div class="p-4 border border-slate-200 rounded-lg bg-slate-50 md:col-span-2 lg:col-span-3">
+                                <h4 class="font-bold text-lg text-slate-700" data-lang-key="trafficModelingTitle">Mô hình hóa Giao thông & Cảnh quan</h4>
+                                <p class="text-sm text-slate-600 mt-2" data-lang-key="trafficModelingDesc"><b>Mục tiêu:</b> Hoàn thiện mô hình "song sinh kỹ thuật số" cho toàn bộ không gian ngoài trời. <br><b>Phạm vi:</b> Tái tạo mô hình 3D cho toàn bộ hệ thống đường nội bộ, lối đi bộ, cây xanh, và các yếu tố cảnh quan khác. Dữ liệu này phục vụ cho việc quy hoạch, phân tích và mô phỏng trong tương lai.</p>
+                            </div>
+                        </div>
+                    </div>
+                 </div>
+            </section>
+            
+            <section id="dashboard-page" class="transition-opacity duration-300 opacity-30" aria-busy="true">
+                <main>
+                    <section id="indoor-section" class="mb-16 p-6 bg-white rounded-xl shadow-md">
+                        <h2 class="text-2xl font-bold text-cyan-800 mb-4 border-l-4 border-cyan-500 pl-4" data-lang-key="dbIndoorTitle">Không gian Trong nhà (Indoor)</h2>
+                        <p class="text-slate-600 mb-8" data-lang-key="dbIndoorDesc">Phần này trình bày tiến độ chi tiết của dự án mô hình hóa thông tin hình học theo từng tòa nhà và tiến độ chung của thông tin phi hình học.</p>
+                        <div class="grid md:grid-cols-2 gap-8 items-start">
+                            <div>
+                                <h3 class="font-bold text-lg text-slate-700 mb-3" data-lang-key="dbBuildingProgressTitle">Tiến độ Mô hình hóa Hình học theo Tòa nhà</h3>
+                                <div class="max-h-96 overflow-y-auto pr-2 space-y-3 custom-scrollbar border rounded-lg p-3 bg-slate-50">
+                                    <div id="building-list"></div>
+                                </div>
+                                <div class="p-4 border border-slate-200 rounded-lg bg-slate-50 mt-4">
+                                    <h3 class="font-bold text-lg text-slate-700" data-lang-key="dbNonGeoTitle">Thông tin Phi hình học (Toàn bộ)</h3>
+                                    <p class="text-sm text-slate-500" data-lang-key="dbNonGeoDesc">Gán thuộc tính: mã, chức năng, sức chứa...</p>
+                                     <div class="w-full bg-slate-200 rounded-full h-2.5 mt-2">
+                                        <div id="nongeo-bar" class="bg-sky-500 h-2.5 rounded-full" style="width: 5%"></div>
+                                    </div>
+                                    <p id="nongeo-text" class="text-right text-sm font-semibold text-sky-600">5%</p>
+                                </div>
+                            </div>
+                            <div class="w-full">
+                                <div class="chart-container flex flex-col items-center justify-center" style="max-width: 400px; height: 320px;">
+                                    <canvas id="indoorOverallProgressChart"></canvas>
+                                     <div id="average-progress-text" class="text-center -mt-16"></div>
+                                </div>
+                                <p class="text-center text-sm text-slate-500 mt-2" data-lang-key="dbIndoorChartCaption">Biểu đồ tổng quan tiến độ trung bình của 17 tòa nhà.</p>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section id="outdoor-section" class="mb-16 p-6 bg-white rounded-xl shadow-md">
+                        <h2 class="text-2xl font-bold text-cyan-800 mb-6 border-l-4 border-cyan-500 pl-4" data-lang-key="dbOutdoorTitle">Không gian Ngoài trời (Outdoor)</h2>
+                        
+                        <div>
+                            <h3 class="text-xl font-semibold text-slate-700 mb-4" data-lang-key="dbOutdoorPart1Title">Phần 1: Làm việc chung với nhà Thầu</h3>
+                            <p class="text-slate-600 mb-8" data-lang-key="dbOutdoorPart1Desc">Trình bày tiến độ triển khai các đề xuất cải thiện không gian chung. Nhấp vào từng hạng mục để xem chi tiết.</p>
+                            <div class="grid lg:grid-cols-3 gap-6">
+                                <div class="lg:col-span-1 flex flex-col space-y-4">
+                                    <div id="card-signage" class="outdoor-card p-4 border-2 border-transparent rounded-lg bg-slate-50 cursor-pointer hover:shadow-lg transition-all duration-300">
+                                        <h4 class="font-bold text-lg text-slate-700" data-lang-key="cardSignageTitle">Thiết kế hệ thống Bảng hiệu</h4>
+                                        <p class="text-sm text-slate-500 mb-2" data-lang-key="cardSignageDesc">Tăng nhận diện thương hiệu và tối ưu điều hướng.</p>
+                                        <span id="status-signage" class="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-amber-600 bg-amber-200">Đang triển khai</span>
+                                    </div>
+                                     <div id="card-space" class="outdoor-card p-4 border-2 border-transparent rounded-lg bg-slate-50 cursor-pointer hover:shadow-lg transition-all duration-300">
+                                        <h4 class="font-bold text-lg text-slate-700" data-lang-key="cardSpaceTitle">Thiết kế Không gian</h4>
+                                        <p class="text-sm text-slate-500 mb-2" data-lang-key="cardSpaceDesc">Quy hoạch cây xanh, lối đi, khu vực nghỉ ngơi.</p>
+                                        <span id="status-space" class="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-amber-600 bg-amber-200">Đang triển khai</span>
+                                    </div>
+                                    <div id="card-energy" class="outdoor-card p-4 border-2 border-transparent rounded-lg bg-slate-50 cursor-pointer hover:shadow-lg transition-all duration-300">
+                                        <h4 class="font-bold text-lg text-slate-700" data-lang-key="cardEnergyTitle">Quản lý Năng lượng</h4>
+                                        <p class="text-sm text-slate-500 mb-2" data-lang-key="cardEnergyDesc">Sử dụng hiệu quả hệ thống chiếu sáng, tưới tiêu.</p>
+                                        <span id="status-energy" class="text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full text-amber-600 bg-amber-200">Đang triển khai</span>
+                                    </div>
+                                </div>
+                                <div class="lg:col-span-2 p-4 border border-slate-200 rounded-lg bg-white min-h-[250px]">
+                                    <h4 id="outdoor-detail-title" class="text-xl font-bold text-cyan-700 mb-2" data-lang-key="detailTitle">Chi tiết Hạng mục</h4>
+                                    <p id="outdoor-detail-content" class="text-slate-600 whitespace-pre-line" data-lang-key="detailPlaceholder">Vui lòng chọn một hạng mục bên trái để xem thông tin chi tiết.</p>
+                                </div>
+                            </div>
+                             <div class="mt-8">
+                                 <div class="chart-container" style="max-width: 100%;">
+                                    <canvas id="outdoorChart"></canvas>
+                                </div>
+                                <p class="text-center text-sm text-slate-500 mt-2" data-lang-key="dbOutdoorChartCaption">Biểu đồ so sánh tiến độ các dự án ngoài trời.</p>
+                             </div>
+                        </div>
+
+                        <hr class="my-10 border-slate-200">
+
+                        <div>
+                            <h3 class="text-xl font-semibold text-slate-700 mb-4" data-lang-key="dbOutdoorPart2Title">Phần 2: Mô hình hóa Giao thông & Cảnh quan</h3>
+                            <div class="p-4 border border-slate-200 rounded-lg bg-slate-50">
+                                <h4 class="font-bold text-lg text-slate-700" data-lang-key="dbTrafficModelingTitle">Dựng model giao thông và cảnh quan campus</h4>
+                                <p class="text-sm text-slate-500" data-lang-key="dbTrafficModelingDesc">Tái tạo mô hình 3D cho hệ thống đường, lối đi, cây xanh và các yếu tố cảnh quan khác.</p>
+                                <div class="w-full bg-slate-200 rounded-full h-2.5 mt-2">
+                                    <div id="traffic-bar" class="bg-teal-500 h-2.5 rounded-full" style="width: 5%"></div>
+                                </div>
+                                <p id="traffic-text" class="text-right text-sm font-semibold text-teal-600">5%</p>
+                            </div>
+                        </div>
+                    </section>
+                    
+                    <section id="next-steps-section" class="p-6 bg-white rounded-xl shadow-md">
+                         <h2 class="text-2xl font-bold text-cyan-800 mb-4 border-l-4 border-cyan-500 pl-4" data-lang-key="nextStepsTitle">Kế hoạch & Đề xuất</h2>
+                         <div class="grid md:grid-cols-2 gap-8">
+                            <div>
+                                <h3 class="font-bold text-lg mb-2 text-slate-700" data-lang-key="nextStepsPlanTitle">Kế hoạch cho kỳ tiếp theo</h3>
+                                <ul class="list-disc list-inside space-y-2 text-slate-600" data-lang-key="nextStepsPlanItems">
+                                    <li><strong class="font-semibold text-slate-700">Indoor:</strong> Tích hợp dữ liệu mô hình vào phần mềm quản lý và đào tạo các bộ phận liên quan.</li>
+                                    <li><strong class="font-semibold text-slate-700">Outdoor:</strong> Hoàn thiện và trình duyệt proposal thiết kế không gian, lập kế hoạch ngân sách và tiến độ cho hệ thống bảng hiệu.</li>
+                                </ul>
+                            </div>
+                             <div>
+                                <h3 class="font-bold text-lg mb-2 text-slate-700" data-lang-key="nextStepsIssuesTitle">Khó khăn & Đề xuất</h3>
+                                <p class="text-slate-600 bg-amber-50 border-l-4 border-amber-400 p-4 rounded-r-lg" data-lang-key="nextStepsIssuesContent">
+                                   <strong class="font-semibold text-amber-800">Khó khăn: </strong>Việc thu thập dữ liệu phi hình học từ một số phòng ban còn chậm trễ.
+                                   <br>
+                                   <strong class="font-semibold text-green-800">Đề xuất: </strong>Tổ chức một cuộc họp chung để phổ biến tầm quan trọng của dự án và thống nhất thời hạn cung cấp thông tin.
+                                </p>
+                            </div>
+                         </div>
+                    </section>
+
+                </main>
+            </section>
+
+            <section id="taxonomy-page" class="hidden">
+                <h2 class="text-2xl md:text-3xl font-bold text-cyan-800 text-center mb-2" data-lang-key="taxonomyTitle">Phân cấp Định danh Phòng ốc</h2>
+                <p class="text-center text-slate-600 mb-8 max-w-3xl mx-auto" data-lang-key="taxonomySubtitle">Hệ thống mã định danh cơ sở vật chất theo 4 cấp: Khối chính (Level 1) &rarr; Nhánh (Level 2A) &rarr; Phân loại (Level 2B) &rarr; Chi tiết (Level 3). Mỗi nút hiển thị mã tiếng Anh kèm mô tả tiếng Việt.</p>
+
+                <div class="p-6 bg-white rounded-xl shadow-md">
+                    <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
+                        <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-600">
+                            <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full" style="background:#0891b2"></span><span data-lang-key="taxoLegendAcademic">Học tập / Kỹ thuật</span></span>
+                            <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full" style="background:#0d9488"></span><span data-lang-key="taxoLegendSupport">Phục vụ / Nội trú</span></span>
+                            <span class="flex items-center gap-1.5"><span class="w-3 h-3 rounded-full" style="background:#d97706"></span><span data-lang-key="taxoLegendAdmin">Hành chính / Quốc phòng</span></span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button id="taxo-expand" class="text-xs font-semibold px-3 py-1.5 rounded-full bg-cyan-600 text-white hover:bg-cyan-700 transition-colors" data-lang-key="taxoExpandAll">Mở tất cả</button>
+                            <button id="taxo-collapse" class="text-xs font-semibold px-3 py-1.5 rounded-full bg-slate-200 text-slate-700 hover:bg-slate-300 transition-colors" data-lang-key="taxoCollapseAll">Thu gọn</button>
+                        </div>
+                    </div>
+<div class="taxo-tree">
+<details open class="taxo-l1 rounded-lg mb-3 shadow-sm" style="--acc:#0891b2">
+<summary class="flex items-center gap-2 flex-wrap px-3 py-2.5"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">L1</span><span class="font-mono text-slate-800 font-semibold text-sm">1. ACADEMIC</span><span class="text-xs text-slate-500">Khối học tập - thí nghiệm</span></summary>
+<div class="taxo-kids py-1">
+<details open class="taxo-branch" style="--acc:#0891b2">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">CLASSROOM/ SEMINAR</span><span class="text-xs text-slate-500">Phòng học thông thường dưới 100 chỗ</span></summary>
+<div class="taxo-kids py-1">
+<details open class="taxo-branch" style="--acc:#0891b2">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Classroom.S</span><span class="text-xs text-slate-500">Phòng học (dưới 25 chỗ)</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Computer</span><span class="text-xs text-slate-500">Phòng học máy tính</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Language</span><span class="text-xs text-slate-500">Phòng học ngoại ngữ</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Art</span><span class="text-xs text-slate-500">Phòng học nhạc họa</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">MultiFunction</span><span class="text-xs text-slate-500">Phòng học đa năng</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Other</span><span class="text-xs text-slate-500">Phòng học khác</span></div>
+</div></details>
+<details open class="taxo-branch" style="--acc:#0891b2">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Classroom.M</span><span class="text-xs text-slate-500">Phòng học (từ 25 đến dưới 75 chỗ)</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Computer</span><span class="text-xs text-slate-500">Phòng học máy tính</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Language</span><span class="text-xs text-slate-500">Phòng học ngoại ngữ</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Art</span><span class="text-xs text-slate-500">Phòng học nhạc họa</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">MultiFunction</span><span class="text-xs text-slate-500">Phòng học đa năng</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Other</span><span class="text-xs text-slate-500">Phòng học khác</span></div>
+</div></details>
+<details open class="taxo-branch" style="--acc:#0891b2">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Classroom.L</span><span class="text-xs text-slate-500">Phòng học (từ 75 đến dưới 100 chỗ)</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Computer</span><span class="text-xs text-slate-500">Phòng học máy tính</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Language</span><span class="text-xs text-slate-500">Phòng học ngoại ngữ</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Art</span><span class="text-xs text-slate-500">Phòng học nhạc họa</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">MultiFunction</span><span class="text-xs text-slate-500">Phòng học đa năng</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Other</span><span class="text-xs text-slate-500">Phòng học khác</span></div>
+</div></details>
+</div></details>
+<details open class="taxo-branch" style="--acc:#0891b2">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">LECTURE POD</span><span class="text-xs text-slate-500">Giảng đường (từ 100 chỗ trở lên)</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Lecture Hall O100</span><span class="text-xs text-slate-500">Giảng đường (từ 100 chỗ trở lên)</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Lecture Pod O200</span><span class="text-xs text-slate-500">Giảng đường (từ 200 chỗ trở lên)</span></div>
+</div></details>
+<details open class="taxo-branch" style="--acc:#0891b2">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">LABORATORY</span><span class="text-xs text-slate-500">Phòng thí nghiệm</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Chemistry and Physics Laboratory</span><span class="text-xs text-slate-500">Phòng lab thí nghiệm hóa học, vật lý</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Medical Laboratory (hoặc Clinical Laboratory)</span><span class="text-xs text-slate-500">Phòng thí nghiệm y tế</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Public Health Laboratory</span><span class="text-xs text-slate-500">Phòng thí nghiệm y tế công cộng</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Pharmaceutical and Special Technology Research &amp; Production Laboratory</span><span class="text-xs text-slate-500">Phòng thí nghiệm nghiên cứu và sản xuất các loại thuốc hoặc các công nghệ đặc biệt</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Media Laboratory</span><span class="text-xs text-slate-500">Phòng thí nghiệm phương tiện truyền thông</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Research and Educational Laboratory</span><span class="text-xs text-slate-500">Phòng thí nghiệm nghiên cứu, học tập</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Film Laboratory or Darkroom</span><span class="text-xs text-slate-500">Phòng lab chiếu phim hoặc phòng tối</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Computer Laboratory</span><span class="text-xs text-slate-500">Phòng thí nghiệm máy tính</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">STEM Laboratory</span><span class="text-xs text-slate-500">Phòng lab STEM</span></div>
+</div></details>
+<details open class="taxo-branch" style="--acc:#0891b2">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">WORKSHOP</span><span class="text-xs text-slate-500">Xưởng thực hành / vườn, trại thực nghiệm</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Education Sciences and Teacher Training</span><span class="text-xs text-slate-500">Khoa học giáo dục và đào tạo giáo viên</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Arts</span><span class="text-xs text-slate-500">Nghệ thuật</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Humanities</span><span class="text-xs text-slate-500">Nhân văn</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Social and Behavioral Sciences</span><span class="text-xs text-slate-500">Khoa học xã hội và hành vi</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Journalism and Information</span><span class="text-xs text-slate-500">Báo chí và thông tin</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Business and Management</span><span class="text-xs text-slate-500">Kinh doanh và quản lý</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Law</span><span class="text-xs text-slate-500">Pháp luật</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Life Sciences</span><span class="text-xs text-slate-500">Khoa học sự sống</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Natural Sciences</span><span class="text-xs text-slate-500">Khoa học tự nhiên</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Mathematics and Statistics</span><span class="text-xs text-slate-500">Toán và thống kê</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Computing and Information Technology</span><span class="text-xs text-slate-500">Máy tính và công nghệ thông tin</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Engineering Technology</span><span class="text-xs text-slate-500">Công nghệ kỹ thuật</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Engineering</span><span class="text-xs text-slate-500">Kỹ thuật</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Manufacturing and Processing</span><span class="text-xs text-slate-500">Sản xuất và chế biến</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Architecture and Construction</span><span class="text-xs text-slate-500">Kiến trúc và xây dựng</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Agriculture, Forestry and Fisheries</span><span class="text-xs text-slate-500">Nông, lâm nghiệp và thủy sản</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Veterinary Medicine</span><span class="text-xs text-slate-500">Thú y</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Health</span><span class="text-xs text-slate-500">Sức khỏe</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Social Services</span><span class="text-xs text-slate-500">Dịch vụ xã hội</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Tourism, Hospitality, Sports and Personal Services</span><span class="text-xs text-slate-500">Du lịch, khách sạn, thể thao và dịch vụ cá nhân</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Transport Services</span><span class="text-xs text-slate-500">Dịch vụ vận tải</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Environment and Environmental Protection</span><span class="text-xs text-slate-500">Môi trường và bảo vệ môi trường</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Security and Defense</span><span class="text-xs text-slate-500">An ninh, quốc phòng</span></div>
+</div></details>
+</div></details>
+<details open class="taxo-l1 rounded-lg mb-3 shadow-sm" style="--acc:#0d9488">
+<summary class="flex items-center gap-2 flex-wrap px-3 py-2.5"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">L1</span><span class="font-mono text-slate-800 font-semibold text-sm">2. ACADEMIC_SUPPORT</span><span class="text-xs text-slate-500">Khối phục vụ học tập</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">LIBRARY</span><span class="text-xs text-slate-500">Thư viện</span></div>
+<details open class="taxo-branch" style="--acc:#0d9488">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">AUDITORIUM</span><span class="text-xs text-slate-500">Hội trường (từ 250 chỗ trở lên)</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Table</span><span class="text-xs text-slate-500">Hội trường có bàn viết</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Non-Table</span><span class="text-xs text-slate-500">Hội trường không có bàn viết</span></div>
+</div></details>
+</div></details>
+<details open class="taxo-l1 rounded-lg mb-3 shadow-sm" style="--acc:#d97706">
+<summary class="flex items-center gap-2 flex-wrap px-3 py-2.5"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">L1</span><span class="font-mono text-slate-800 font-semibold text-sm">3. ADMINISTRATION</span><span class="text-xs text-slate-500">Khối hiệu bộ - hành chính</span></summary>
+<div class="taxo-kids py-1">
+<details open class="taxo-branch" style="--acc:#d97706">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">OFFICE</span><span class="text-xs text-slate-500">Hội đồng nhà trường</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">UniversityCouncil</span><span class="text-xs text-slate-500">Hội đồng nhà trường</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">PrincipalBoard</span><span class="text-xs text-slate-500">Phòng làm việc của Ban giám hiệu (gồm hiệu trưởng, các phó hiệu trưởng, giám đốc, các phó giám đốc)</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Professor</span><span class="text-xs text-slate-500">Phòng làm việc của giáo sư và phó giáo sư</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Faculty</span><span class="text-xs text-slate-500">Phòng làm việc của các khoa và bộ môn trực thuộc trường</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Administration</span><span class="text-xs text-slate-500">Phòng, ban đoàn thể</span></div>
+</div></details>
+<details open class="taxo-branch" style="--acc:#d97706">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">MEETING</span><span class="text-xs text-slate-500">Phòng họp của cán bộ giảng dạy</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Faculty</span><span class="text-xs text-slate-500">Phòng họp của cán bộ giảng dạy</span></div>
+</div></details>
+<details open class="taxo-branch" style="--acc:#d97706">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">FUNCTION OFFICE</span><span class="text-xs text-slate-500">Phòng chức năng khác (hành chính - tổng hợp, tổ chức, cán bộ, đào tạo đại học và sau đại học, khoa học và công nghệ, công tác chính trị, kế hoạch - tài chính…)</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Meeting</span><span class="text-xs text-slate-500">Phòng họp</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Data Input</span><span class="text-xs text-slate-500">Phòng nhập liệu-ASA</span></div>
+</div></details>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">MEDICAL CENTER</span><span class="text-xs text-slate-500">Trạm y tế</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">PARKING</span><span class="text-xs text-slate-500">Nhà để xe cho cán bộ giảng dạy, sinh viên, và cán bộ khác</span></div>
+<details open class="taxo-branch" style="--acc:#d97706">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">RESTROOM</span><span class="text-xs text-slate-500">Nhà vệ sinh</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Male</span><span class="text-xs text-slate-500">Nam</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Female</span><span class="text-xs text-slate-500">Nữ</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Accessible</span><span class="text-xs text-slate-500">Người Khuyết tật</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Janitor</span><span class="text-xs text-slate-500">Khu để dụng cụ vệ sinh</span></div>
+</div></details>
+</div></details>
+<details open class="taxo-l1 rounded-lg mb-3 shadow-sm" style="--acc:#0891b2">
+<summary class="flex items-center gap-2 flex-wrap px-3 py-2.5"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">L1</span><span class="font-mono text-slate-800 font-semibold text-sm">4. SPORT</span><span class="text-xs text-slate-500">Khu thể dục thể thao</span></summary>
+<div class="taxo-kids py-1">
+<details open class="taxo-branch" style="--acc:#0891b2">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">INSIDE</span><span class="text-xs text-slate-500">Công trình thể thao có mái che</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Multipurpose Sports Hall / Indoor Arena</span><span class="text-xs text-slate-500">Nhà thi đấu đa năng</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Multipurpose Gymnasium / Training Hall</span><span class="text-xs text-slate-500">Nhà tập đa năng</span></div>
+</div></details>
+<details open class="taxo-branch" style="--acc:#0891b2">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">OUTSIDE</span><span class="text-xs text-slate-500">Công trình thể thao ngoài trời</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Swimming Pool</span><span class="text-xs text-slate-500">Bể bơi</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Volleyball Court</span><span class="text-xs text-slate-500">Sân bóng chuyền</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Football Pitch / Soccer Field</span><span class="text-xs text-slate-500">Sân bóng đá</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Badminton Court</span><span class="text-xs text-slate-500">Sân cầu lông</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2B</span><span class="font-mono text-slate-800 text-[13px] font-medium">Tennis Court</span><span class="text-xs text-slate-500">Sân Tennis</span></div>
+</div></details>
+</div></details>
+<details open class="taxo-l1 rounded-lg mb-3 shadow-sm" style="--acc:#0d9488">
+<summary class="flex items-center gap-2 flex-wrap px-3 py-2.5"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">L1</span><span class="font-mono text-slate-800 font-semibold text-sm">5. RESIDENTIAL</span><span class="text-xs text-slate-500">Khu nội trú</span></summary>
+<div class="taxo-kids py-1">
+<details open class="taxo-branch" style="--acc:#0d9488">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">DORMITORY</span><span class="text-xs text-slate-500">Nhà ở sinh viên (ký túc xá)</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Bachelor</span><span class="text-xs text-slate-500">Cử nhân</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Master</span><span class="text-xs text-slate-500">Thạc Sĩ</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">PhD</span><span class="text-xs text-slate-500">Tiến Sĩ</span></div>
+</div></details>
+<details open class="taxo-branch" style="--acc:#0d9488">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">SCHOLAR ACCOMMODATION</span><span class="text-xs text-slate-500">Nhà ở công vụ cho cán bộ giảng dạy</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Guest House</span><span class="text-xs text-slate-500">Khu nhà Khách</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Villa</span><span class="text-xs text-slate-500">Khu Villa</span></div>
+</div></details>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">CANTEEN</span><span class="text-xs text-slate-500">Nhà ăn</span></div>
+<details open class="taxo-branch" style="--acc:#0d9488">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">SERVICE</span><span class="text-xs text-slate-500">Các công trình dịch vụ công cộng (cửa hàng giải khát; cửa hàng bán lẻ; cắt tóc, gội đầu; cửa hàng sách báo, tem thư, bưu điện; cửa hàng cắt may…)</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Convenience Store</span><span class="text-xs text-slate-500">Cửa hàng tiện lợi</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0d9488">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Laundry Room</span><span class="text-xs text-slate-500">Khu giặt</span></div>
+</div></details>
+</div></details>
+<details open class="taxo-l1 rounded-lg mb-3 shadow-sm" style="--acc:#d97706">
+<summary class="flex items-center gap-2 flex-wrap px-3 py-2.5"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">L1</span><span class="font-mono text-slate-800 font-semibold text-sm">6. NATIONAL_DEFENCE</span><span class="text-xs text-slate-500">Các công trình dành cho hoạt động giáo dục quốc phòng</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">NATIONAL DEFENSE EDUCATION GROUNDS</span><span class="text-xs text-slate-500">Sân hoạt động giáo dục quốc phòng</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#d97706">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">TECHNICAL TRAINING GROUND</span><span class="text-xs text-slate-500">Thao trường kỹ thuật</span></div>
+</div></details>
+<details open class="taxo-l1 rounded-lg mb-3 shadow-sm" style="--acc:#0891b2">
+<summary class="flex items-center gap-2 flex-wrap px-3 py-2.5"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">L1</span><span class="font-mono text-slate-800 font-semibold text-sm">7. TECHNICAL_AREA</span><span class="text-xs text-slate-500">Khối kĩ thuật giao thông</span></summary>
+<div class="taxo-kids py-1">
+<details open class="taxo-branch" style="--acc:#0891b2">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">CIRCULATION</span><span class="text-xs text-slate-500">Giao thông nội bộ</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Corridor</span><span class="text-xs text-slate-500">Hành lang</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Vestibule</span><span class="text-xs text-slate-500">Tiền sảnh / Khoảng đệm (khu vực chuyển tiếp trước khi vào sảnh chính)</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Stairs</span><span class="text-xs text-slate-500">Cầu thang / Thang bộ</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Lobby</span><span class="text-xs text-slate-500">Sảnh chính / Sảnh tiếp đón</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Lounge</span><span class="text-xs text-slate-500">Khu vực nghỉ ngơi / Phòng chờ thư giãn</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Elevator</span><span class="text-xs text-slate-500">Thang máy</span></div>
+</div></details>
+<details open class="taxo-branch" style="--acc:#0891b2">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">MEP</span><span class="text-xs text-slate-500">Phòng Kỹ thuật</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Electrical</span><span class="text-xs text-slate-500">Phòng kỹ thuật điện</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Server</span><span class="text-xs text-slate-500">Phòng máy chủ (Server)</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Generator</span><span class="text-xs text-slate-500">Phòng máy phát điện</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Maintenance</span><span class="text-xs text-slate-500">Phòng bảo trì / Khu vực bảo dưỡng</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Mechanical</span><span class="text-xs text-slate-500">Phòng kỹ thuật cơ / Phòng máy</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Water</span><span class="text-xs text-slate-500">Phòng cấp nước / Trạm bơm nước</span></div>
+</div></details>
+<details open class="taxo-branch" style="--acc:#0891b2">
+<summary class="taxo-node flex items-center gap-2 flex-wrap py-1 px-1"><svg class="taxo-chev inline-block w-3.5 h-3.5 text-slate-400 flex-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">2A</span><span class="font-mono text-slate-800 text-[13px] font-medium">STORAGE</span><span class="text-xs text-slate-500">Kho</span></summary>
+<div class="taxo-kids py-1">
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Equipment</span><span class="text-xs text-slate-500">Kho Thiết bị</span></div>
+<div class="taxo-node flex items-center gap-2 flex-wrap py-1 pl-6 pr-1"><span class="taxo-badge flex-none text-[10px] font-semibold text-white rounded-full px-1.5 py-0.5 leading-none" style="background:#0891b2">3</span><span class="font-mono text-slate-800 text-[13px] font-medium">Central</span><span class="text-xs text-slate-500">Kho Trung tâm</span></div>
+</div></details>
+</div></details>
+</div>
+                </div>
+            </section>
+
+        </div>
+    </div>
+
+    <script>
+        // <DATA-PARSER>
+        // ==== Nguồn dữ liệu: file Excel đặt cạnh index.html ====
+        const DATA_URL = 'data.xlsx';
+        const OUTDOOR_IDS = ['signage', 'space', 'energy'];
+
+        // Số liệu mặc định (bản chụp lúc tạo data.xlsx). Chỉ dùng khi không đọc được file Excel.
+        const DEFAULT_DATA = {
+            "reportDate": null,
+            "nonGeoProgress": 5,
+            "trafficProgress": 5,
+            "buildings": [
+                {
+                    "vi": "Tòa nhà hành chính",
+                    "en": "Admin Building",
+                    "progress": 60
+                },
+                {
+                    "vi": "Tòa nhà triển lãm",
+                    "en": "Exhibition Hall",
+                    "progress": 10
+                },
+                {
+                    "vi": "Tòa nhà thư viện",
+                    "en": "Library Building",
+                    "progress": 30
+                },
+                {
+                    "vi": "Tòa nhà giảng đường",
+                    "en": "Lecture Hall",
+                    "progress": 30
+                },
+                {
+                    "vi": "Tòa nhà hội trường",
+                    "en": "Auditorium",
+                    "progress": 2
+                },
+                {
+                    "vi": "Tòa nhà ăn",
+                    "en": "Cafeteria Building",
+                    "progress": 10
+                },
+                {
+                    "vi": "Tòa nhà thể thao+ hồ bơi+ sân tập",
+                    "en": "Sports Complex",
+                    "progress": 10
+                },
+                {
+                    "vi": "Tòa nhà trung tâm",
+                    "en": "Center Building",
+                    "progress": 20
+                },
+                {
+                    "vi": "Tòa nhà học thuật 1",
+                    "en": "Academic Building 1",
+                    "progress": 80
+                },
+                {
+                    "vi": "Tòa nhà học thuật 2",
+                    "en": "Academic Building 2",
+                    "progress": 80
+                },
+                {
+                    "vi": "Tòa nhà học thuật 3",
+                    "en": "Academic Building 3",
+                    "progress": 80
+                },
+                {
+                    "vi": "Tòa nhà học thuật 5",
+                    "en": "Academic Building 5",
+                    "progress": 80
+                },
+                {
+                    "vi": "Tòa nhà học thuật 6",
+                    "en": "Academic Building 6",
+                    "progress": 80
+                },
+                {
+                    "vi": "Tòa nhà khách",
+                    "en": "Guest House",
+                    "progress": 2
+                },
+                {
+                    "vi": "Khu nhà villa",
+                    "en": "Villa Area",
+                    "progress": 10
+                },
+                {
+                    "vi": "Nhà kí túc xá 1",
+                    "en": "Dormitory 1",
+                    "progress": 30
+                },
+                {
+                    "vi": "Nhà kí túc xá 2",
+                    "en": "Dormitory 2",
+                    "progress": 30
+                }
+            ],
+            "outdoor": {
+                "signage": {
+                    "progress": 10,
+                    "status": "inprogress",
+                    "vi": {
+                        "title": "Thiết kế hệ thống Bảng hiệu",
+                        "content": "Đã hoàn thành khảo sát hiện trạng. Hiện đang trong giai đoạn làm việc với các nhà thầu thiết kế để nhận báo giá chi tiết cho việc sản xuất và lắp đặt."
+                    },
+                    "en": {
+                        "title": "Signage System Design",
+                        "content": "Site survey is complete. Currently working with design contractors to receive detailed quotes for production and installation."
+                    }
+                },
+                "space": {
+                    "progress": 15,
+                    "status": "inprogress",
+                    "vi": {
+                        "title": "Thiết kế Không gian",
+                        "content": "Phần khảo sát mặt bằng và nhu cầu sử dụng đã hoàn tất. Đang tiến hành làm việc với đơn vị thiết kế để có báo giá cho các hạng mục cải tạo không gian."
+                    },
+                    "en": {
+                        "title": "Space Design",
+                        "content": "The site and user needs survey has been completed. Currently working with the design firm to obtain quotes for space renovation items."
+                    }
+                },
+                "energy": {
+                    "progress": 10,
+                    "status": "inprogress",
+                    "vi": {
+                        "title": "Hướng dẫn Quản lý Năng lượng",
+                        "content": "Bản hướng dẫn sơ bộ đang được triển khai (Huỳnh + Nghĩa). Tài liệu này cung cấp các quy định và gợi ý về việc sử dụng hiệu quả năng lượng được tham khảo từ tiêu chí của EDGE, nhằm tiết kiệm năng lượng và giảm chi phí vận hành."
+                    },
+                    "en": {
+                        "title": "Energy Management Guidelines",
+                        "content": "Preliminary guidelines are being implemented (by Huynh + Nghia). This document provides regulations and suggestions for efficient energy use, referenced from EDGE criteria, to save energy and reduce operating costs."
+                    }
+                }
+            }
+        };
+
+        function normText(s) {
+            return String(s == null ? '' : s).normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+                .replace(/đ/gi, 'd').toLowerCase().trim();
+        }
+        function findSheet(wb, key) {
+            const name = wb.SheetNames.find(n => normText(n).replace(/[^a-z0-9]+/g, '_') === key);
+            return name ? wb.Sheets[name] : null;
+        }
+        function cellAt(ws, r, c) { return ws[XLSX.utils.encode_cell({ r: r, c: c })]; }
+        function cellStr(cell) { return (cell && cell.v != null) ? String(cell.v).trim() : ''; }
+        function lastRow(ws) { return ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']).e.r : 0; }
+        function isEmpty(cell) { return !cell || cell.v == null || cell.v === ''; }
+
+        // Đọc một ô tiến độ (%). Trả về null nếu ô trống.
+        function readPercent(cell, where, warn) {
+            if (isEmpty(cell)) return null;
+            let v = cell.v;
+            if (typeof v === 'string') {
+                v = parseFloat(v.trim().replace('%', '').replace(',', '.'));
+                if (isNaN(v)) {
+                    warn(where + ': "' + cell.v + '" không phải là số — tạm tính là 0',
+                         where + ': "' + cell.v + '" is not a number — treated as 0');
+                    return 0;
+                }
+            } else if (typeof v === 'number') {
+                // Ô định dạng % trong Excel lưu 0.6 cho 60% -> nhân 100
+                if (cell.z && String(cell.z).indexOf('%') >= 0) v = v * 100;
+            } else {
+                warn(where + ': giá trị không hợp lệ — tạm tính là 0', where + ': invalid value — treated as 0');
+                return 0;
+            }
+            v = Math.round(v * 10) / 10;
+            if (v < 0 || v > 100) {
+                warn(where + ': ' + v + ' nằm ngoài khoảng 0–100 — đã đưa về khoảng hợp lệ',
+                     where + ': ' + v + ' is outside 0–100 — clamped');
+                v = Math.min(100, Math.max(0, v));
+            }
+            return v;
+        }
+
+        // Ngày: ô kiểu ngày -> 'YYYY-MM-DD'; ô chữ -> giữ nguyên chữ.
+        function readDate(cell) {
+            if (isEmpty(cell)) return null;
+            const v = cell.v;
+            const pad = n => String(n).padStart(2, '0');
+            if (v instanceof Date) return v.getFullYear() + '-' + pad(v.getMonth() + 1) + '-' + pad(v.getDate());
+            if (typeof v === 'number' && ((cell.z && XLSX.SSF.is_date(cell.z)) || (v > 20000 && v < 80000))) {
+                const p = XLSX.SSF.parse_date_code(v);
+                if (p) return p.y + '-' + pad(p.m) + '-' + pad(p.d);
+            }
+            return String(v).trim();
+        }
+
+        function readStatus(cell, where, warn) {
+            const s = normText(cellStr(cell));
+            if (!s) return null;
+            if (/chua.*hoan thanh|not (yet )?complete/.test(s)) return 'inprogress';
+            if (/hoan thanh|complete|done|finish/.test(s)) return 'done';
+            if (/tam dung|hold|pause|stop/.test(s)) return 'onhold';
+            if (/chua|not start|todo|to do|pending/.test(s)) return 'notstarted';
+            if (/dang|progress|ongoing|trien khai|implement/.test(s)) return 'inprogress';
+            warn(where + ': trạng thái "' + cellStr(cell) + '" không nhận ra — giữ trạng thái mặc định',
+                 where + ': status "' + cellStr(cell) + '" not recognised — keeping the default');
+            return null;
+        }
+
+        // Chuyển workbook (SheetJS) thành dữ liệu cho trang. Không bao giờ ném lỗi vì dữ liệu sai:
+        // phần nào lỗi thì dùng số mặc định và ghi vào danh sách cảnh báo.
+        function parseWorkbook(wb, defaults) {
+            const warnings = [];
+            const warn = (vi, en) => warnings.push({ vi: vi, en: en });
+            const data = JSON.parse(JSON.stringify(defaults));
+
+            // --- Sheet Tong_quan: ngày báo cáo + 2 thanh % ---
+            const wsG = findSheet(wb, 'tong_quan');
+            if (!wsG) {
+                warn('Không thấy sheet "Tong_quan" — dùng giá trị mặc định cho ngày báo cáo và hai thanh %.',
+                     'Sheet "Tong_quan" not found — using defaults for the report date and the two progress bars.');
+            } else {
+                data.reportDate = null;
+                const found = {};
+                for (let r = 1; r <= lastRow(wsG); r++) {
+                    const key = normText(cellStr(cellAt(wsG, r, 0)));
+                    const cell = cellAt(wsG, r, 2);
+                    const where = 'Tong_quan!C' + (r + 1);
+                    if (key === 'report_date') { found[key] = true; data.reportDate = readDate(cell); }
+                    else if (key === 'nongeo_progress') { found[key] = true; const v = readPercent(cell, where, warn); if (v !== null) data.nonGeoProgress = v; }
+                    else if (key === 'traffic_progress') { found[key] = true; const v = readPercent(cell, where, warn); if (v !== null) data.trafficProgress = v; }
+                }
+                ['nongeo_progress', 'traffic_progress'].forEach(k => {
+                    if (!found[k]) warn('Sheet Tong_quan thiếu dòng có mã "' + k + '" — dùng giá trị mặc định.',
+                                        'Sheet Tong_quan has no row with code "' + k + '" — using the default.');
+                });
+            }
+
+            // --- Sheet Indoor_ToaNha: tiến độ từng tòa nhà ---
+            const wsB = findSheet(wb, 'indoor_toanha');
+            if (!wsB) {
+                warn('Không thấy sheet "Indoor_ToaNha" — dùng danh sách tòa nhà mặc định.',
+                     'Sheet "Indoor_ToaNha" not found — using the default building list.');
+            } else {
+                const list = [];
+                for (let r = 1; r <= lastRow(wsB); r++) {
+                    const vi = cellStr(cellAt(wsB, r, 0)), en = cellStr(cellAt(wsB, r, 1));
+                    const pc = cellAt(wsB, r, 2);
+                    if (!vi && !en && isEmpty(pc)) continue;
+                    if (!vi && !en) {
+                        warn('Indoor_ToaNha dòng ' + (r + 1) + ': có tiến độ nhưng thiếu tên tòa nhà — bỏ qua dòng này.',
+                             'Indoor_ToaNha row ' + (r + 1) + ': progress given but no building name — row skipped.');
+                        continue;
+                    }
+                    let p = readPercent(pc, 'Indoor_ToaNha!C' + (r + 1), warn);
+                    if (p === null) {
+                        warn('Indoor_ToaNha!C' + (r + 1) + ': chưa nhập tiến độ cho "' + (vi || en) + '" — tạm tính là 0.',
+                             'Indoor_ToaNha!C' + (r + 1) + ': no progress entered for "' + (en || vi) + '" — treated as 0.');
+                        p = 0;
+                    }
+                    list.push({ vi: vi || en, en: en || vi, progress: p });
+                }
+                if (list.length) data.buildings = list;
+                else warn('Sheet Indoor_ToaNha không có dòng hợp lệ — dùng danh sách mặc định.',
+                          'Sheet Indoor_ToaNha has no valid rows — using the default list.');
+            }
+
+            // --- Sheet Outdoor_HangMuc: 3 hạng mục ngoài trời ---
+            const wsO = findSheet(wb, 'outdoor_hangmuc');
+            if (!wsO) {
+                warn('Không thấy sheet "Outdoor_HangMuc" — dùng số liệu ngoài trời mặc định.',
+                     'Sheet "Outdoor_HangMuc" not found — using the default outdoor data.');
+            } else {
+                const found = {};
+                for (let r = 1; r <= lastRow(wsO); r++) {
+                    const key = normText(cellStr(cellAt(wsO, r, 0)));
+                    if (!key || !/^[a-z0-9_]+$/.test(key)) continue;   // bỏ qua dòng trống / dòng ghi chú
+                    if (OUTDOOR_IDS.indexOf(key) < 0) {
+                        warn('Outdoor_HangMuc dòng ' + (r + 1) + ': mã "' + key + '" không được web hỗ trợ (chỉ signage, space, energy) — bỏ qua.',
+                             'Outdoor_HangMuc row ' + (r + 1) + ': code "' + key + '" is not supported (only signage, space, energy) — skipped.');
+                        continue;
+                    }
+                    found[key] = true;
+                    const o = data.outdoor[key];
+                    const p = readPercent(cellAt(wsO, r, 2), 'Outdoor_HangMuc!C' + (r + 1), warn);
+                    if (p !== null) o.progress = p;
+                    const st = readStatus(cellAt(wsO, r, 3), 'Outdoor_HangMuc!D' + (r + 1), warn);
+                    if (st) o.status = st;
+                    const tv = cellStr(cellAt(wsO, r, 4)), cv = cellStr(cellAt(wsO, r, 5));
+                    const te = cellStr(cellAt(wsO, r, 6)), ce = cellStr(cellAt(wsO, r, 7));
+                    if (tv || te) { o.vi.title = tv || te; o.en.title = te || tv; }
+                    if (cv || ce) { o.vi.content = cv || ce; o.en.content = ce || cv; }
+                }
+                OUTDOOR_IDS.forEach(k => {
+                    if (!found[k]) warn('Outdoor_HangMuc thiếu dòng có mã "' + k + '" — dùng số liệu mặc định.',
+                                        'Outdoor_HangMuc has no row with code "' + k + '" — using the default.');
+                });
+            }
+            return { data: data, warnings: warnings };
+        }
+        // </DATA-PARSER>
+
+        document.addEventListener('DOMContentLoaded', function () {
+            // --- DATA & TRANSLATIONS ---
+            const translations = {
+                vi: {
+                    mainTitle: "Dự án Quản lý Không gian Toàn diện",
+                    navProposal: "Proposal",
+                    navDashboard: "Báo cáo Tiến độ",
+                    navTaxonomy: "Phân cấp Định danh",
+                    taxonomyTitle: "Phân cấp Định danh Phòng ốc",
+                    taxonomySubtitle: "Hệ thống mã định danh cơ sở vật chất theo 4 cấp: Khối chính (Level 1) &rarr; Nhánh (Level 2A) &rarr; Phân loại (Level 2B) &rarr; Chi tiết (Level 3). Mỗi nút hiển thị mã tiếng Anh kèm mô tả tiếng Việt.",
+                    taxoLegendAcademic: "Học tập / Kỹ thuật",
+                    taxoLegendSupport: "Phục vụ / Nội trú",
+                    taxoLegendAdmin: "Hành chính / Quốc phòng",
+                    taxoExpandAll: "Mở tất cả",
+                    taxoCollapseAll: "Thu gọn",
+                    proposalTitle: "Đề xuất Kế hoạch",
+                    proposalSubtitle: "Mô tả chi tiết mục tiêu và phạm vi công việc của từng hạng mục trong dự án.",
+                    indoorSectionTitle: "Không gian Trong nhà (Indoor)",
+                    geoModelingTitle: "Mô hình hóa Thông tin Hình học",
+                    geoModelingDesc: "<b>Mục tiêu:</b> Xây dựng nền tảng \"song sinh kỹ thuật số\" (Digital Twin) cho toàn bộ 17 tòa nhà trong campus. <br><b>Phạm vi:</b> Dựng mô hình 2D và 3D chính xác, thể hiện đúng kích thước, vị trí, diện tích của từng phòng, hành lang, và các không gian chức năng khác. Đây là lớp dữ liệu cơ sở cho mọi hoạt động quản lý về sau.",
+                    nonGeoModelingTitle: "Mô hình hóa Thông tin Phi hình học",
+                    nonGeoModelingDesc: "<b>Mục tiêu:</b> Làm giàu mô hình hình học bằng các dữ liệu vận hành. <br><b>Phạm vi:</b> Gán các thuộc tính quan trọng vào từng không gian trong mô hình, bao gồm: mã phòng, tên gọi, chức năng sử dụng, sức chứa, tình trạng, và danh sách tài sản liên quan. Dữ liệu này giúp tối ưu hóa việc sử dụng không gian và quản lý tài sản.",
+                    bridgeTitle: "Cầu nối giữa Mô hình và Thực tế: Xây dựng Quy trình Vận hành",
+                    bridgeDesc: "Để hiện thực hóa tiềm năng của mô hình thông tin, bước tiếp theo là xây dựng một bộ <strong>hướng dẫn và quy trình vận hành</strong> chi tiết. Điều này đảm bảo rằng các nhóm có thể khai thác dữ liệu từ mô hình một cách nhất quán và hiệu quả, làm cầu nối giữa việc \"có mô hình\" và \"sử dụng được mô hình\" để thực hiện các công tác quản lý.",
+                    resultsTitle: "Kết quả kỳ vọng: Các tác vụ có thể đạt được khi có quy trình vận hành",
+                    group1Title: "I. Nhóm Task Chính – Quản lý & Vận hành Cốt lõi",
+                    group1Items: "<li><b>Quản lý phòng ốc:</b> Xuất Room Schedule, theo dõi tỉ lệ sử dụng, lập sơ đồ màu trực quan.</li><li><b>Quản lý tài sản:</b> Xuất danh sách nội thất, liên kết mã tài sản, lập kế hoạch bảo trì.</li><li><b>Quản lý cấu kiện:</b> Thống kê số lượng cửa, vật liệu để lên kế hoạch sơn sửa, thay thế.</li><li><b>Kiểm tra quy chuẩn:</b> Đối chiếu tự động với QCVN/TCVN, flag các phòng không đạt chuẩn.</li>",
+                    group2Title: "II. Nhóm Task Phụ – Phân tích & Hỗ trợ Quyết định",
+                    group2Items: "<li><b>Phân tích chiếu sáng:</b> Tính tỉ lệ diện tích cửa sổ, phân tích hướng nắng để đề xuất giải pháp tiết kiệm năng lượng.</li><li><b>Phân tích hiệu quả không gian:</b> Phát hiện phòng bị chiếm dụng sai mục đích, đề xuất tái bố trí.</li><li><b>Phân tích vòng đời tài sản:</b> Theo dõi tuổi thọ thiết bị, ước tính chi phí bảo trì và lập kế hoạch thay thế dài hạn.</li><li><b>Phân tích năng lượng (nâng cao):</b> Xuất mô hình sang phần mềm chuyên dụng để tính toán năng lượng tiêu thụ, tải lạnh.</li>",
+                    group3Title: "III. Nhóm Task Kết Nối & Chuyển giao Dữ liệu",
+                    group3Items: "<li><b>Xuất dữ liệu:</b> Export sang Excel, Power BI để tạo dashboard vận hành thời gian thực.</li><li><b>Kết nối hệ thống:</b> Tích hợp với các phần mềm CMMS/FM để vận hành số.</li><li><b>Bàn giao số hóa:</b> Tạo bộ hồ sơ as-built BIM cho các đơn vị liên quan.</li><li><b>Liên kết bản đồ:</b> Tích hợp với GIS hoặc bản đồ nội bộ để quản lý trên nền tảng bản đồ.</li>",
+                    exampleTitle: "Ví dụ Output từ Mô hình hóa cho Phòng mẫu (Phòng thực hành điện B3-109)",
+                    exampleDesc: "Dưới đây là một số kết quả đầu ra trực quan từ việc xây dựng mô hình thông tin cho một phòng mẫu, minh họa cho khả năng trích xuất dữ liệu của hệ thống.",
+                    caption3D: "Phối cảnh 3D",
+                    captionSchedule: "Bảng thống kê Nội thất & Thiết bị",
+                    captionNewPlan: "Mặt bằng bố trí vật dụng (Mới)",
+                    captionOldPlan: "Mặt bằng bố trí vật dụng (Cũ)",
+                    outdoorSectionTitle: "Không gian Ngoài trời (Outdoor)",
+                    signageTitle: "Thiết kế hệ thống Bảng hiệu",
+                    signageDesc: "<b>Mục tiêu:</b> Nâng cao nhận diện thương hiệu và cải thiện trải nghiệm điều hướng trong campus. <br><b>Phạm vi:</b> Khảo sát hiện trạng, đề xuất các mẫu thiết kế mới, lựa chọn vật liệu và vị trí lắp đặt. Làm việc với nhà thầu để nhận báo giá và lên kế hoạch thi công.",
+                    spaceDesignTitle: "Thiết kế Không gian",
+                    spaceDesignDesc: "<b>Mục tiêu:</b> Tạo dựng môi trường làm việc và học tập xanh, thân thiện và truyền cảm hứng. <br><b>Phạm vi:</b> Khảo sát mặt bằng và nhu cầu, lên ý tưởng quy hoạch lại các khu vực cây xanh, lối đi bộ, khu vực nghỉ ngơi. Làm việc với các đơn vị thiết kế để có phương án và báo giá chi tiết.",
+                    energyMgmtTitle: "Quản lý Năng lượng",
+                    energyMgmtDesc: "<b>Mục tiêu:</b> Tối ưu hóa việc sử dụng năng lượng, giảm chi phí vận hành và hướng tới công trình xanh. <br><b>Phạm vi:</b> Xây dựng bộ hướng dẫn sử dụng năng lượng hiệu quả, tham khảo từ tiêu chí của EDGE. Người thực hiện: Huỳnh + Nghĩa.",
+                    trafficModelingTitle: "Mô hình hóa Giao thông & Cảnh quan",
+                    trafficModelingDesc: "<b>Mục tiêu:</b> Hoàn thiện mô hình \"song sinh kỹ thuật số\" cho toàn bộ không gian ngoài trời. <br><b>Phạm vi:</b> Tái tạo mô hình 3D cho toàn bộ hệ thống đường nội bộ, lối đi bộ, cây xanh, và các yếu tố cảnh quan khác. Dữ liệu này phục vụ cho việc quy hoạch, phân tích và mô phỏng trong tương lai.",
+                    dbIndoorTitle: "Không gian Trong nhà (Indoor)",
+                    dbIndoorDesc: "Phần này trình bày tiến độ chi tiết của dự án mô hình hóa thông tin hình học theo từng tòa nhà và tiến độ chung của thông tin phi hình học.",
+                    dbBuildingProgressTitle: "Tiến độ Mô hình hóa Hình học theo Tòa nhà",
+                    dbNonGeoTitle: "Thông tin Phi hình học (Toàn bộ)",
+                    dbNonGeoDesc: "Gán thuộc tính: mã, chức năng, sức chứa...",
+                    dbIndoorChartCaption: "Biểu đồ tổng quan tiến độ trung bình của {n} tòa nhà.",
+                    avgProgressText: "Tiến độ trung bình",
+                    dbOutdoorTitle: "Không gian Ngoài trời (Outdoor)",
+                    dbOutdoorPart1Title: "Phần 1: Làm việc chung với nhà Thầu",
+                    dbOutdoorPart1Desc: "Trình bày tiến độ triển khai các đề xuất cải thiện không gian chung. Nhấp vào từng hạng mục để xem chi tiết.",
+                    cardSignageTitle: "Thiết kế hệ thống Bảng hiệu",
+                    cardSignageDesc: "Tăng nhận diện thương hiệu và tối ưu điều hướng.",
+                    cardSpaceTitle: "Thiết kế Không gian",
+                    cardSpaceDesc: "Quy hoạch cây xanh, lối đi, khu vực nghỉ ngơi.",
+                    cardEnergyTitle: "Quản lý Năng lượng",
+                    cardEnergyDesc: "Sử dụng hiệu quả hệ thống chiếu sáng, tưới tiêu.",
+                    statusInProgress: "Đang triển khai",
+                    statusNotStarted: "Chưa bắt đầu",
+                    statusDone: "Hoàn thành",
+                    statusOnHold: "Tạm dừng",
+                    dataUpdated: "Cập nhật",
+                    dataSourceLabel: "Nguồn số liệu",
+                    dataSourceDefault: "dữ liệu mặc định (chưa nối Excel)",
+                    dataReload: "Tải lại",
+                    dataPick: "Chọn file Excel",
+                    dataDropHint: "hoặc kéo-thả file .xlsx vào trang",
+                    dataErrorTitle: "Chưa nối được với file Excel",
+                    dataShowingDefault: "Đang hiển thị dữ liệu mặc định, có thể chưa phải số liệu mới nhất.",
+                    dataShowingPrevious: "Vẫn đang hiển thị số liệu đã nạp trước đó.",
+                    dataWarnTitle: "Lưu ý về dữ liệu trong file Excel",
+                    detailTitle: "Chi tiết Hạng mục",
+                    detailPlaceholder: "Vui lòng chọn một hạng mục bên trái để xem thông tin chi tiết.",
+                    dbOutdoorChartCaption: "Biểu đồ so sánh tiến độ các dự án ngoài trời.",
+                    dbOutdoorPart2Title: "Phần 2: Mô hình hóa Giao thông & Cảnh quan",
+                    dbTrafficModelingTitle: "Dựng model giao thông và cảnh quan campus",
+                    dbTrafficModelingDesc: "Tái tạo mô hình 3D cho hệ thống đường, lối đi, cây xanh và các yếu tố cảnh quan khác.",
+                    nextStepsTitle: "Kế hoạch & Đề xuất",
+                    nextStepsPlanTitle: "Kế hoạch cho kỳ tiếp theo",
+                    nextStepsPlanItems: "<li><strong class=\"font-semibold text-slate-700\">Indoor:</strong> Tích hợp dữ liệu mô hình vào phần mềm quản lý và đào tạo các bộ phận liên quan.</li><li><strong class=\"font-semibold text-slate-700\">Outdoor:</strong> Hoàn thiện và trình duyệt proposal thiết kế không gian, lập kế hoạch ngân sách và tiến độ cho hệ thống bảng hiệu.</li>",
+                    nextStepsIssuesTitle: "Khó khăn & Đề xuất",
+                    nextStepsIssuesContent: "<strong class=\"font-semibold text-amber-800\">Khó khăn: </strong>Việc thu thập dữ liệu phi hình học từ một số phòng ban còn chậm trễ.<br><strong class=\"font-semibold text-green-800\">Đề xuất: </strong>Tổ chức một cuộc họp chung để phổ biến tầm quan trọng của dự án và thống nhất thời hạn cung cấp thông tin."
+                },
+                en: {
+                    mainTitle: "Comprehensive Space Management Project",
+                    navProposal: "Proposal",
+                    navDashboard: "Progress Report",
+                    navTaxonomy: "Room Taxonomy",
+                    taxonomyTitle: "Facility Naming Taxonomy",
+                    taxonomySubtitle: "Facility identification codes across 4 levels: Main Block (Level 1) &rarr; Branch (Level 2A) &rarr; Category (Level 2B) &rarr; Detail (Level 3). Each node shows the English code with its Vietnamese description.",
+                    taxoLegendAcademic: "Academic / Technical",
+                    taxoLegendSupport: "Support / Residential",
+                    taxoLegendAdmin: "Administration / Defence",
+                    taxoExpandAll: "Expand all",
+                    taxoCollapseAll: "Collapse",
+                    proposalTitle: "Project Proposal",
+                    proposalSubtitle: "Detailed description of the objectives and scope for each item in the project.",
+                    indoorSectionTitle: "Indoor Space",
+                    geoModelingTitle: "Geometric Information Modeling",
+                    geoModelingDesc: "<b>Objective:</b> Build a 'Digital Twin' platform for all 17 buildings on campus. <br><b>Scope:</b> Create accurate 2D and 3D models representing the correct dimensions, locations, and areas of each room, corridor, and other functional spaces. This is the foundational data layer for all subsequent management activities.",
+                    nonGeoModelingTitle: "Non-Geometric Information Modeling",
+                    nonGeoModelingDesc: "<b>Objective:</b> Enrich the geometric model with operational data. <br><b>Scope:</b> Assign important attributes to each space in the model, including: room code, name, function, capacity, status, and a list of related assets. This data helps optimize space utilization and asset management.",
+                    bridgeTitle: "The Bridge Between Model and Reality: Building Operational Procedures",
+                    bridgeDesc: "To realize the potential of the information model, the next step is to build a detailed set of <strong>guidelines and operational procedures</strong>. This ensures that teams can leverage data from the model consistently and effectively, bridging the gap between 'having a model' and 'using the model' to perform management tasks.",
+                    resultsTitle: "Expected Outcomes: Tasks Achievable with Operational Procedures",
+                    group1Title: "I. Core Tasks – Core Management & Operations",
+                    group1Items: "<li><b>Room Management:</b> Export Room Schedules, track utilization rates, create intuitive color schemes.</li><li><b>Asset Management:</b> Export furniture/equipment lists, link internal asset codes, plan maintenance schedules.</li><li><b>Component Management:</b> Tally door/window counts, track materials for planning repairs and replacements.</li><li><b>Standard Compliance Check:</b> Automatically check against national standards (QCVN/TCVN), flag non-compliant rooms.</li>",
+                    group2Title: "II. Ancillary Tasks – Analysis & Decision Support",
+                    group2Items: "<li><b>Lighting Analysis:</b> Calculate window-to-floor area ratios, analyze sun orientation to suggest energy-saving solutions.</li><li><b>Space Efficiency Analysis:</b> Identify rooms used for unintended purposes, propose re-layouts.</li><li><b>Asset Lifecycle Analysis:</b> Track equipment age, estimate future maintenance costs, and plan long-term replacements.</li><li><b>Energy Analysis (Advanced):</b> Export models to specialized software to calculate energy consumption and cooling loads.</li>",
+                    group3Title: "III. Connectivity & Data Transfer Tasks",
+                    group3Items: "<li><b>Data Export:</b> Export to Excel, Power BI to create real-time operational dashboards.</li><li><b>System Integration:</b> Connect with CMMS/FM software for digital operations.</li><li><b>Digital Handover:</b> Create as-built BIM packages for relevant parties.</li><li><b>Map Linking:</b> Integrate with GIS or internal maps for management on a map-based platform.</li>",
+                    exampleTitle: "Example Output from a Model Room (Electrical Workshop B3-109)",
+                    exampleDesc: "Below are some visual outputs from building the information model for a sample room, illustrating the system's data extraction capabilities.",
+                    caption3D: "3D Perspective View",
+                    captionSchedule: "Furniture & Equipment Schedule",
+                    captionNewPlan: "Furniture Layout Plan (New)",
+                    captionOldPlan: "Furniture Layout Plan (Old)",
+                    outdoorSectionTitle: "Outdoor Space",
+                    signageTitle: "Signage System Design",
+                    signageDesc: "<b>Objective:</b> Enhance brand identity and improve navigation experience on campus. <br><b>Scope:</b> Conduct site surveys, propose new designs, select materials and locations. Work with contractors to get quotes and plan for execution.",
+                    spaceDesignTitle: "Space Design",
+                    spaceDesignDesc: "<b>Objective:</b> Create a green, friendly, and inspiring environment for work and study. <br><b>Scope:</b> Survey the area and user needs, brainstorm ideas for replanning green areas, walkways, and rest areas. Work with design firms for detailed plans and quotes.",
+                    energyMgmtTitle: "Energy Management",
+                    energyMgmtDesc: "<b>Objective:</b> Optimize energy use, reduce operational costs, and move towards a green building standard. <br><b>Scope:</b> Develop energy efficiency guidelines based on EDGE criteria. Implemented by: Huynh + Nghia.",
+                    trafficModelingTitle: "Traffic & Landscape Modeling",
+                    trafficModelingDesc: "<b>Objective:</b> Complete the 'digital twin' model for the entire outdoor space. <br><b>Scope:</b> Recreate a 3D model of the entire internal road system, walkways, green spaces, and other landscape elements. This data will serve future planning, analysis, and simulation.",
+                    dbIndoorTitle: "Indoor Space",
+                    dbIndoorDesc: "This section presents the detailed progress of the geometric information modeling project for each building and the overall progress of non-geometric information.",
+                    dbBuildingProgressTitle: "Geometric Modeling Progress by Building",
+                    dbNonGeoTitle: "Non-Geometric Information (Overall)",
+                    dbNonGeoDesc: "Assigning attributes: code, function, capacity...",
+                    dbIndoorChartCaption: "Overview chart of the average progress for {n} buildings.",
+                    avgProgressText: "Average Progress",
+                    dbOutdoorTitle: "Outdoor Space",
+                    dbOutdoorPart1Title: "Part 1: Working with Contractors",
+                    dbOutdoorPart1Desc: "Presents the implementation progress of proposals to improve common areas. Click on each item for details.",
+                    cardSignageTitle: "Signage System Design",
+                    cardSignageDesc: "Enhance brand identity and optimize navigation.",
+                    cardSpaceTitle: "Space Design",
+                    cardSpaceDesc: "Planning green areas, walkways, and rest areas.",
+                    cardEnergyTitle: "Energy Management",
+                    cardEnergyDesc: "Efficient use of lighting and irrigation systems.",
+                    statusInProgress: "In Progress",
+                    statusNotStarted: "Not started",
+                    statusDone: "Completed",
+                    statusOnHold: "On hold",
+                    dataUpdated: "Updated",
+                    dataSourceLabel: "Data source",
+                    dataSourceDefault: "built-in default data (Excel not linked)",
+                    dataReload: "Reload",
+                    dataPick: "Choose Excel file",
+                    dataDropHint: "or drag & drop an .xlsx file onto the page",
+                    dataErrorTitle: "Could not connect to the Excel file",
+                    dataShowingDefault: "Showing built-in default data, which may not be the latest figures.",
+                    dataShowingPrevious: "Still showing the data loaded earlier.",
+                    dataWarnTitle: "Notes about the data in the Excel file",
+                    detailTitle: "Item Details",
+                    detailPlaceholder: "Please select an item on the left to see detailed information.",
+                    dbOutdoorChartCaption: "Chart comparing the progress of outdoor projects.",
+                    dbOutdoorPart2Title: "Part 2: Traffic & Landscape Modeling",
+                    dbTrafficModelingTitle: "Modeling Campus Traffic and Landscape",
+                    dbTrafficModelingDesc: "Recreating a 3D model of the road system, walkways, greenery, and other landscape elements.",
+                    nextStepsTitle: "Plan & Proposals",
+                    nextStepsPlanTitle: "Plan for the next period",
+                    nextStepsPlanItems: "<li><strong class=\"font-semibold text-slate-700\">Indoor:</strong> Integrate model data into management software and train relevant departments.</li><li><strong class=\"font-semibold text-slate-700\">Outdoor:</strong> Finalize and submit the space design proposal, develop a budget and schedule for the signage system.</li>",
+                    nextStepsIssuesTitle: "Issues & Recommendations",
+                    nextStepsIssuesContent: "<strong class=\"font-semibold text-amber-800\">Issue: </strong>Collection of non-geometric data from some departments is delayed.<br><strong class=\"font-semibold text-green-800\">Recommendation: </strong>Organize a general meeting to communicate the project's importance and set a deadline for providing information."
+                }
+            };
+
+            // Số liệu đang hiển thị (mặc định = bản chụp trong DEFAULT_DATA; được thay bằng số liệu đọc từ data.xlsx)
+            let reportData = JSON.parse(JSON.stringify(DEFAULT_DATA));
+            let dataSource = { kind: 'default', name: '' };
+            let dataWarnings = [];
+            let dataError = null;
+            let selectedOutdoor = 'signage';
+            
+            let currentLang = 'vi';
+            let indoorChartInstance, outdoorChartInstance;
+
+            // --- NAVIGATION ---
+            const navProposal = document.getElementById('nav-proposal');
+            const navDashboard = document.getElementById('nav-dashboard');
+            const navTaxonomy = document.getElementById('nav-taxonomy');
+            const proposalPage = document.getElementById('proposal-page');
+            const dashboardPage = document.getElementById('dashboard-page');
+            const taxonomyPage = document.getElementById('taxonomy-page');
+            const navButtons = [navProposal, navDashboard, navTaxonomy];
+            const langBtnVi = document.getElementById('lang-vi');
+            const langBtnEn = document.getElementById('lang-en');
+
+            function switchPage(pageToShow) {
+                proposalPage.classList.add('hidden');
+                dashboardPage.classList.add('hidden');
+                taxonomyPage.classList.add('hidden');
+                navButtons.forEach(btn => btn.classList.remove('active'));
+
+                if (pageToShow === 'proposal') {
+                    proposalPage.classList.remove('hidden');
+                    navProposal.classList.add('active');
+                } else if (pageToShow === 'taxonomy') {
+                    taxonomyPage.classList.remove('hidden');
+                    navTaxonomy.classList.add('active');
+                } else {
+                    dashboardPage.classList.remove('hidden');
+                    navDashboard.classList.add('active');
+                    if (indoorChartInstance) indoorChartInstance.resize();
+                    if (outdoorChartInstance) outdoorChartInstance.resize();
+                }
+            }
+            
+            function setLanguage(lang) {
+                currentLang = lang;
+                const langElements = document.querySelectorAll('[data-lang-key]');
+                langElements.forEach(el => {
+                    const key = el.getAttribute('data-lang-key');
+                    if (translations[lang][key]) {
+                        el.innerHTML = translations[lang][key];
+                    }
+                });
+
+                if (lang === 'vi') {
+                    langBtnVi.classList.add('bg-cyan-600', 'text-white', 'shadow');
+                    langBtnEn.classList.remove('bg-cyan-600', 'text-white', 'shadow');
+                } else {
+                    langBtnEn.classList.add('bg-cyan-600', 'text-white', 'shadow');
+                    langBtnVi.classList.remove('bg-cyan-600', 'text-white', 'shadow');
+                }
+                
+                document.documentElement.lang = lang;
+                renderDashboard(lang);
+            }
+
+            // --- RENDER FUNCTIONS ---
+            const STATUS_STYLE = {
+                notstarted: 'text-slate-600 bg-slate-200',
+                inprogress: 'text-amber-600 bg-amber-200',
+                done: 'text-emerald-700 bg-emerald-200',
+                onhold: 'text-rose-600 bg-rose-100'
+            };
+            const STATUS_TEXT_KEY = {
+                notstarted: 'statusNotStarted',
+                inprogress: 'statusInProgress',
+                done: 'statusDone',
+                onhold: 'statusOnHold'
+            };
+            const MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+            function esc(s) {
+                return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+            }
+            function fmtDate(v, lang) {
+                const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+                if (!m) return v;
+                if (lang === 'vi') return m[3] + '/' + m[2] + '/' + m[1];
+                return parseInt(m[3], 10) + ' ' + (MONTHS_EN[parseInt(m[2], 10) - 1] || m[2]) + ' ' + m[1];
+            }
+
+            function renderDashboard(lang) {
+                renderBuildingList(lang);
+                renderCharts(lang);
+                renderProgressBars();
+                renderOutdoorCards(lang);
+                showOutdoorDetail(selectedOutdoor);
+                renderDataStatus(lang);
+            }
+
+            function renderBuildingList(lang) {
+                const buildingListContainer = document.getElementById('building-list');
+                buildingListContainer.innerHTML = '';
+                reportData.buildings.forEach(building => {
+                    const buildingEl = document.createElement('div');
+                    buildingEl.className = 'p-2 rounded-md';
+                    buildingEl.innerHTML = `
+                        <div class="flex justify-between items-center mb-1">
+                            <span class="text-slate-700 text-sm font-medium">${esc(building[lang])}</span>
+                            <span class="text-sm font-semibold text-cyan-700">${building.progress}%</span>
+                        </div>
+                        <div class="w-full bg-slate-200 rounded-full h-1.5">
+                            <div class="bg-cyan-500 h-1.5 rounded-full" style="width: ${building.progress}%"></div>
+                        </div>
+                    `;
+                    buildingListContainer.appendChild(buildingEl);
+                });
+            }
+
+            function renderCharts(lang) {
+                if(indoorChartInstance) indoorChartInstance.destroy();
+                if(outdoorChartInstance) outdoorChartInstance.destroy();
+
+                const count = reportData.buildings.length;
+                const totalProgress = reportData.buildings.reduce((sum, building) => sum + building.progress, 0);
+                const averageProgress = count ? Number((totalProgress / count).toFixed(1)) : 0;
+
+                const caption = document.querySelector('[data-lang-key="dbIndoorChartCaption"]');
+                if (caption) caption.textContent = translations[lang].dbIndoorChartCaption.replace('{n}', count);
+
+                const indoorOverallCtx = document.getElementById('indoorOverallProgressChart').getContext('2d');
+                indoorChartInstance = new Chart(indoorOverallCtx, {
+                    type: 'doughnut', data: {
+                        labels: [lang === 'vi' ? 'Hoàn thành' : 'Completed', lang === 'vi' ? 'Còn lại' : 'Remaining'],
+                        datasets: [{ data: [averageProgress, 100 - averageProgress], backgroundColor: ['#06b6d4', '#e2e8f0'], borderColor: '#ffffff', borderWidth: 4, circumference: 270, rotation: 225, }]
+                    },
+                    options: { responsive: true, maintainAspectRatio: false, cutout: '80%', plugins: { legend: { display: false }, tooltip: { enabled: false } } }
+                });
+
+                document.getElementById('average-progress-text').innerHTML = `
+                    <span class="text-4xl font-bold text-cyan-800">${averageProgress.toFixed(1)}%</span>
+                    <p class="text-sm text-slate-500">${translations[lang].avgProgressText}</p>`;
+
+                const outdoorCtx = document.getElementById('outdoorChart').getContext('2d');
+                outdoorChartInstance = new Chart(outdoorCtx, {
+                    type: 'bar',
+                    data: {
+                        labels: [translations[lang].cardSignageTitle, translations[lang].cardSpaceTitle, translations[lang].cardEnergyTitle],
+                        datasets: [{
+                            label: lang === 'vi' ? 'Tiến độ (%)' : 'Progress (%)',
+                            data: OUTDOOR_IDS.map(id => reportData.outdoor[id].progress),
+                            backgroundColor: ['rgba(14, 165, 233, 0.6)', 'rgba(245, 158, 11, 0.6)', 'rgba(59, 130, 246, 0.6)'],
+                            borderColor: ['#0ea5e9', '#f59e0b', '#3b82f6'],
+                            borderWidth: 1
+                        }]
+                    },
+                    options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, scales: { x: { beginAtZero: true, max: 100, ticks: { callback: (value) => value + "%" } } }, plugins: { legend: { display: false }, title: { display: true, text: translations[lang].dbOutdoorChartCaption } } }
+                });
+            }
+
+            function renderProgressBars() {
+                [['nongeo', reportData.nonGeoProgress], ['traffic', reportData.trafficProgress]].forEach(pair => {
+                    document.getElementById(pair[0] + '-bar').style.width = pair[1] + '%';
+                    document.getElementById(pair[0] + '-text').textContent = pair[1] + '%';
+                });
+            }
+
+            function renderOutdoorCards(lang) {
+                OUTDOOR_IDS.forEach(id => {
+                    const badge = document.getElementById('status-' + id);
+                    if (!badge) return;
+                    const st = reportData.outdoor[id].status;
+                    badge.className = 'text-xs font-semibold inline-block py-1 px-2 uppercase rounded-full ' + STATUS_STYLE[st];
+                    badge.textContent = translations[lang][STATUS_TEXT_KEY[st]];
+                });
+            }
+
+            // Dòng "Cập nhật / Nguồn số liệu" dưới tiêu đề + khung cảnh báo khi không nối được Excel
+            function renderDataStatus(lang) {
+                const t = translations[lang];
+                const parts = [];
+                if (reportData.reportDate) parts.push(t.dataUpdated + ': <strong class="text-slate-700">' + esc(fmtDate(reportData.reportDate, lang)) + '</strong>');
+                parts.push(t.dataSourceLabel + ': ' + (dataSource.kind === 'default' ? t.dataSourceDefault : esc(dataSource.name)));
+                const btn = 'px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-700 hover:bg-slate-300 transition-colors';
+                document.getElementById('data-status').innerHTML =
+                    parts.map(p => '<span>' + p + '</span>').join('<span aria-hidden="true">·</span>') +
+                    '<button type="button" data-action="reload" class="' + btn + '">' + t.dataReload + '</button>' +
+                    '<button type="button" data-action="pick" class="' + btn + '">' + t.dataPick + '</button>';
+
+                const banner = document.getElementById('data-banner');
+                if (!dataError && !dataWarnings.length) { banner.className = 'hidden'; banner.innerHTML = ''; return; }
+                let html = '';
+                if (dataError) {
+                    html += '<p class="font-semibold">' + t.dataErrorTitle + '</p>' +
+                            '<p class="mt-1">' + esc(dataError[lang]) + ' ' + (dataSource.kind === 'default' ? t.dataShowingDefault : t.dataShowingPrevious) + '</p>' +
+                            '<p class="mt-3"><button type="button" data-action="pick" class="px-3 py-1 rounded-full bg-cyan-600 text-white hover:bg-cyan-700 transition-colors">' + t.dataPick + '</button>' +
+                            ' <span class="text-xs">' + t.dataDropHint + '</span></p>';
+                }
+                if (dataWarnings.length) {
+                    html += '<p class="font-semibold' + (dataError ? ' mt-4' : '') + '">' + t.dataWarnTitle + '</p><ul class="list-disc list-inside mt-1 space-y-0.5">' +
+                            dataWarnings.map(w => '<li>' + esc(w[lang]) + '</li>').join('') + '</ul>';
+                }
+                banner.className = 'max-w-3xl mx-auto mb-8 p-4 rounded-lg border-l-4 text-sm bg-amber-50 border-amber-400 text-amber-900';
+                banner.innerHTML = html;
+            }
+
+            // --- EVENT LISTENERS & INITIALIZATION ---
+            navProposal.addEventListener('click', () => switchPage('proposal'));
+            navDashboard.addEventListener('click', () => switchPage('dashboard'));
+            navTaxonomy.addEventListener('click', () => switchPage('taxonomy'));
+
+            // --- Taxonomy expand/collapse controls ---
+            const taxoExpandBtn = document.getElementById('taxo-expand');
+            const taxoCollapseBtn = document.getElementById('taxo-collapse');
+            if (taxoExpandBtn) {
+                taxoExpandBtn.addEventListener('click', () => {
+                    taxonomyPage.querySelectorAll('details').forEach(d => d.open = true);
+                });
+            }
+            if (taxoCollapseBtn) {
+                taxoCollapseBtn.addEventListener('click', () => {
+                    taxonomyPage.querySelectorAll('details.taxo-l1').forEach(d => d.open = false);
+                });
+            }
+            langBtnVi.addEventListener('click', () => setLanguage('vi'));
+            langBtnEn.addEventListener('click', () => setLanguage('en'));
+            
+            const outdoorCards = document.querySelectorAll('.outdoor-card');
+            const detailTitle = document.getElementById('outdoor-detail-title');
+            const detailContent = document.getElementById('outdoor-detail-content');
+            const fileInput = document.getElementById('excel-file');
+
+            function showOutdoorDetail(id) {
+                if (!reportData.outdoor[id]) id = OUTDOOR_IDS[0];
+                selectedOutdoor = id;
+                outdoorCards.forEach(c => c.classList.toggle('active-card', c.id === 'card-' + id));
+                const d = reportData.outdoor[id][currentLang];
+                detailTitle.textContent = d.title;
+                detailContent.textContent = d.content;
+            }
+
+            outdoorCards.forEach(card => {
+                const id = card.id.split('-')[1];
+                card.setAttribute('tabindex', '0');
+                card.setAttribute('role', 'button');
+                card.addEventListener('click', () => showOutdoorDetail(id));
+                card.addEventListener('keydown', e => {
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); showOutdoorDetail(id); }
+                });
+            });
+
+            // --- EXCEL LOADING ---
+            function applyWorkbook(wb, source) {
+                const result = parseWorkbook(wb, DEFAULT_DATA);
+                reportData = result.data;
+                dataWarnings = result.warnings;
+                dataSource = source;
+                dataError = null;
+                result.warnings.forEach(w => console.warn('[' + source.name + '] ' + w.vi));
+                renderDashboard(currentLang);
+            }
+
+            // Tự đọc data.xlsx cạnh index.html (cần chạy qua http/https).
+            async function loadFromUrl() {
+                dashboardPage.classList.add('opacity-30');
+                dashboardPage.setAttribute('aria-busy', 'true');
+                try {
+                    if (typeof XLSX === 'undefined') throw new Error('SheetJS not loaded');
+                    const res = await fetch(DATA_URL + '?v=' + Date.now(), { cache: 'no-store' });
+                    if (!res.ok) throw new Error('HTTP ' + res.status);
+                    const wb = XLSX.read(await res.arrayBuffer(), { type: 'array', cellNF: true });
+                    applyWorkbook(wb, { kind: 'url', name: DATA_URL });
+                } catch (err) {
+                    console.warn('Không đọc được ' + DATA_URL + ':', err);
+                    const reason = (err && err.message) ? err.message : String(err);
+                    dataError = location.protocol === 'file:' ? {
+                        vi: 'Trình duyệt không cho trang tự đọc ' + DATA_URL + ' khi mở trực tiếp từ ổ đĩa (file://). Hãy chọn file thủ công, hoặc đặt index.html và ' + DATA_URL + ' lên web server để trang tự đọc.',
+                        en: 'Browsers do not let a page read ' + DATA_URL + ' automatically when opened straight from disk (file://). Choose the file manually, or put index.html and ' + DATA_URL + ' on a web server so it is read automatically.'
+                    } : {
+                        vi: 'Không tải được ' + DATA_URL + ' (' + reason + '). Hãy kiểm tra file có nằm cùng thư mục với index.html không, hoặc chọn file thủ công.',
+                        en: 'Could not load ' + DATA_URL + ' (' + reason + '). Check that it sits in the same folder as index.html, or choose the file manually.'
+                    };
+                    renderDashboard(currentLang);
+                } finally {
+                    dashboardPage.classList.remove('opacity-30');
+                    dashboardPage.removeAttribute('aria-busy');
+                }
+            }
+
+            // Chọn / kéo-thả file Excel thủ công (dùng được cả khi mở bằng file://).
+            function loadFromFile(file) {
+                if (!file) return;
+                const fail = (vi, en) => { dataError = { vi: vi, en: en }; renderDashboard(currentLang); };
+                if (typeof XLSX === 'undefined') return fail('Chưa tải được thư viện đọc Excel (SheetJS) — kiểm tra kết nối mạng.', 'The Excel reader library (SheetJS) did not load — check your connection.');
+                if (!/\.(xlsx|xlsm|xls)$/i.test(file.name)) return fail('"' + file.name + '" không phải file Excel (.xlsx).', '"' + file.name + '" is not an Excel (.xlsx) file.');
+                const reader = new FileReader();
+                reader.onload = e => {
+                    try {
+                        applyWorkbook(XLSX.read(e.target.result, { type: 'array', cellNF: true }), { kind: 'file', name: file.name });
+                    } catch (err) {
+                        console.warn(err);
+                        fail('Không đọc được "' + file.name + '": ' + (err && err.message ? err.message : err), 'Could not read "' + file.name + '": ' + (err && err.message ? err.message : err));
+                    }
+                };
+                reader.onerror = () => fail('Không mở được "' + file.name + '".', 'Could not open "' + file.name + '".');
+                reader.readAsArrayBuffer(file);
+            }
+
+            document.addEventListener('click', e => {
+                const b = e.target.closest ? e.target.closest('[data-action]') : null;
+                if (!b) return;
+                if (b.dataset.action === 'reload') loadFromUrl();
+                else if (b.dataset.action === 'pick') fileInput.click();
+            });
+            fileInput.addEventListener('change', () => { loadFromFile(fileInput.files[0]); fileInput.value = ''; });
+            window.addEventListener('dragover', e => e.preventDefault());
+            window.addEventListener('drop', e => {
+                e.preventDefault();
+                if (e.dataTransfer && e.dataTransfer.files.length) loadFromFile(e.dataTransfer.files[0]);
+            });
+
+            // Initial Load
+            setLanguage(currentLang);
+            switchPage('dashboard');
+            loadFromUrl();
+
+        });
+    </script>
+</body>
+</html>
